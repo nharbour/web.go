@@ -3,14 +3,14 @@ package web
 import (
     "bytes"
     "fmt"
-    "http"
-    "http/cgi"
+    "net/http"
+    "net/http/cgi"
     "io"
     "io/ioutil"
     "net"
-    "os"
     "strconv"
     "strings"
+	"errors"
 )
 
 type scgiConn struct {
@@ -44,13 +44,13 @@ func (conn *scgiConn) Header() http.Header {
     return conn.headers
 }
 
-func (conn *scgiConn) Write(data []byte) (n int, err os.Error) {
+func (conn *scgiConn) Write(data []byte) (n int, err error) {
     if !conn.wroteHeaders {
         conn.WriteHeader(200)
     }
 
     if conn.req.Method == "HEAD" {
-        return 0, os.NewError("Body Not Allowed")
+        return 0, errors.New("Body Not Allowed")
     }
 
     return conn.fd.Write(data)
@@ -58,7 +58,7 @@ func (conn *scgiConn) Write(data []byte) (n int, err os.Error) {
 
 func (conn *scgiConn) Close() { conn.fd.Close() }
 
-func (conn *scgiConn) finishRequest() os.Error {
+func (conn *scgiConn) finishRequest() error {
     var buf bytes.Buffer
     if !conn.wroteHeaders {
         conn.wroteHeaders = true
@@ -74,7 +74,7 @@ func (conn *scgiConn) finishRequest() os.Error {
     return nil
 }
 
-func readScgiRequest(buf *bytes.Buffer) (*http.Request, os.Error) {
+func readScgiRequest(buf *bytes.Buffer) (*http.Request, error) {
     headers := map[string]string{}
 
     data := buf.Bytes()
@@ -82,21 +82,21 @@ func readScgiRequest(buf *bytes.Buffer) (*http.Request, os.Error) {
 
     colon := bytes.IndexByte(data, ':')
     data = data[colon+1:]
-    var err os.Error
+    var err error
     //find the CONTENT_LENGTH
 
     clfields := bytes.SplitN(data, []byte{0}, 3)
     if len(clfields) != 3 {
-        return nil, os.NewError("Invalid SCGI Request -- no fields")
+        return nil, errors.New("Invalid SCGI Request -- no fields")
     }
 
     clfields = clfields[0:2]
     if string(clfields[0]) != "CONTENT_LENGTH" {
-        return nil, os.NewError("Invalid SCGI Request -- expecting CONTENT_LENGTH")
+        return nil, errors.New("Invalid SCGI Request -- expecting CONTENT_LENGTH")
     }
 
     if clen, err = strconv.Atoi(string(clfields[1])); err != nil {
-        return nil, os.NewError("Invalid SCGI Request -- invalid CONTENT_LENGTH field")
+        return nil, errors.New("Invalid SCGI Request -- invalid CONTENT_LENGTH field")
     }
 
     content := data[len(data)-clen:]
@@ -143,7 +143,7 @@ func (s *Server) handleScgiRequest(fd io.ReadWriteCloser) {
 
     req, err := readScgiRequest(&buf)
     if err != nil {
-        s.Logger.Println("SCGI read error", err.String())
+        s.Logger.Println("SCGI read error", err.Error())
         return
     }
 
@@ -153,10 +153,10 @@ func (s *Server) handleScgiRequest(fd io.ReadWriteCloser) {
     fd.Close()
 }
 
-func (s *Server) listenAndServeScgi(addr string) os.Error {
+func (s *Server) listenAndServeScgi(addr string) error {
 
     var l net.Listener
-    var err os.Error
+    var err error
 
     //if the path begins with a "/", assume it's a unix address
     if strings.HasPrefix(addr, "/") {
@@ -169,14 +169,14 @@ func (s *Server) listenAndServeScgi(addr string) os.Error {
     s.l = l
 
     if err != nil {
-        s.Logger.Println("SCGI listen error", err.String())
+        s.Logger.Println("SCGI listen error", err.Error())
         return err
     }
 
     for {
         fd, err := l.Accept()
         if err != nil {
-            s.Logger.Println("SCGI accept error", err.String())
+            s.Logger.Println("SCGI accept error", err.Error())
             return err
         }
         go s.handleScgiRequest(fd)

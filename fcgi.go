@@ -5,13 +5,13 @@ import (
     "bufio"
     "encoding/binary"
     "fmt"
-    "http"
-    "http/cgi"
+    "net/http"
+    "net/http/cgi"
     "io"
     "io/ioutil"
     "net"
-    "os"
     "strings"
+	"errors"
 )
 
 const (
@@ -99,7 +99,7 @@ type fcgiConn struct {
     wroteHeaders bool
 }
 
-func (conn *fcgiConn) fcgiWrite(data []byte) (err os.Error) {
+func (conn *fcgiConn) fcgiWrite(data []byte) (err error) {
     l := len(data)
     // round to the nearest 8
     padding := make([]byte, uint8(-l&7))
@@ -132,13 +132,13 @@ func (conn *fcgiConn) fcgiWrite(data []byte) (err os.Error) {
     return err
 }
 
-func (conn *fcgiConn) Write(data []byte) (n int, err os.Error) {
+func (conn *fcgiConn) Write(data []byte) (n int, err error) {
     if !conn.wroteHeaders {
         conn.WriteHeader(200)
     }
 
     if conn.req.Method == "HEAD" {
-        return 0, os.NewError("Body Not Allowed")
+        return 0, errors.New("Body Not Allowed")
     }
     err = conn.fcgiWrite(data)
     if err != nil {
@@ -233,17 +233,17 @@ func (s *Server) handleFcgiConnection(fd io.ReadWriteCloser) {
     for {
         var h fcgiHeader
         err := binary.Read(br, binary.BigEndian, &h)
-        if err == os.EOF {
+        if err == io.EOF {
             break
         }
         if err != nil {
-            s.Logger.Println("FCGI Error", err.String())
+            s.Logger.Println("FCGI Error", err.Error())
             break
         }
         content := make([]byte, h.ContentLength)
         _, err = io.ReadFull(br, content)
         if err != nil {
-            s.Logger.Println("FCGI Error", err.String())
+            s.Logger.Println("FCGI Error", err.Error())
             break
         }
 
@@ -252,7 +252,7 @@ func (s *Server) handleFcgiConnection(fd io.ReadWriteCloser) {
             padding := make([]byte, h.PaddingLength)
             _, err = io.ReadFull(br, padding)
             if err != nil {
-                s.Logger.Println("FCGI Error", err.String())
+                s.Logger.Println("FCGI Error", err.Error())
                 break
             }
         }
@@ -287,9 +287,9 @@ func (s *Server) handleFcgiConnection(fd io.ReadWriteCloser) {
     }
 }
 
-func (s *Server) listenAndServeFcgi(addr string) os.Error {
+func (s *Server) listenAndServeFcgi(addr string) error {
     var l net.Listener
-    var err os.Error
+    var err error
 
     //if the path begins with a "/", assume it's a unix address
     if strings.HasPrefix(addr, "/") {
@@ -302,13 +302,13 @@ func (s *Server) listenAndServeFcgi(addr string) os.Error {
     s.l = l
 
     if err != nil {
-        s.Logger.Println("FCGI listen error", err.String())
+        s.Logger.Println("FCGI listen error", err.Error())
         return err
     }
     for {
         fd, err := l.Accept()
         if err != nil {
-            s.Logger.Println("FCGI accept error", err.String())
+            s.Logger.Println("FCGI accept error", err.Error())
             break
         }
         go s.handleFcgiConnection(fd)

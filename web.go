@@ -3,10 +3,11 @@ package web
 import (
     "bytes"
     "crypto/hmac"
+    "crypto/sha1"
     "encoding/base64"
     "fmt"
-    "http"
-    "http/pprof"
+    "net/http"
+    "net/http/pprof"
     "io/ioutil"
     "log"
     "mime"
@@ -19,13 +20,13 @@ import (
     "strconv"
     "strings"
     "time"
-    "url"
+    "net/url"
 )
 
 type ResponseWriter interface {
     Header() http.Header
     WriteHeader(status int)
-    Write(data []byte) (n int, err os.Error)
+    Write(data []byte) (n int, err error)
     Close()
 }
 
@@ -82,24 +83,24 @@ func (ctx *Context) SetHeader(hdr string, val string, unique bool) {
 
 //Sets a cookie -- duration is the amount of time in seconds. 0 = forever
 func (ctx *Context) SetCookie(name string, value string, age int64) {
-    var utctime *time.Time
+    var utctime time.Time
     if age == 0 {
         // 2^31 - 1 seconds (roughly 2038)
-        utctime = time.SecondsToUTC(2147483647)
+        utctime = time.Unix(2147483647, 0).UTC()
     } else {
-        utctime = time.SecondsToUTC(time.UTC().Seconds() + age)
+        utctime = time.Unix(time.Now().UTC().Unix() + age, 0).UTC()
     }
-    cookie := fmt.Sprintf("%s=%s; expires=%s", name, value, webTime(utctime))
+    cookie := fmt.Sprintf("%s=%s; expires=%s", name, value, webTime(&utctime))
     ctx.Header().Add("Set-Cookie", cookie)
 }
 
 func getCookieSig(key string, val []byte, timestamp string) string {
-    hm := hmac.NewSHA1([]byte(key))
+    hm := hmac.New(sha1.New, []byte(key))
 
     hm.Write(val)
     hm.Write([]byte(timestamp))
 
-    hex := fmt.Sprintf("%02x", hm.Sum())
+    hex := fmt.Sprintf("%02x", hm.Sum(nil))
     return hex
 }
 
@@ -115,7 +116,7 @@ func (ctx *Context) SetSecureCookie(name string, val string, age int64) {
     encoder.Close()
     vs := buf.String()
     vb := buf.Bytes()
-    timestamp := strconv.Itoa64(time.Seconds())
+    timestamp := strconv.FormatInt(time.Now().Unix(), 10)
     sig := getCookieSig(ctx.Server.Config.CookieSecret, vb, timestamp)
     cookie := strings.Join([]string{vs, timestamp, sig}, "|")
     ctx.SetCookie(name, cookie, age)
@@ -137,9 +138,9 @@ func (ctx *Context) GetSecureCookie(name string) (string, bool) {
             return "", false
         }
 
-        ts, _ := strconv.Atoi64(timestamp)
+        ts, _ := strconv.ParseInt(timestamp, 10, 0)
 
-        if time.Seconds()-31*86400 > ts {
+        if time.Now().Unix()-31*86400 > ts {
             return "", false
         }
 
@@ -273,12 +274,12 @@ func (s *Server) routeHandler(req *http.Request, w ResponseWriter) {
     fmt.Fprintf(&logEntry, "\033[32;1m%s %s\033[0m", req.Method, requestPath)
 
     cType := req.Header.Get("Content-Type")
-    var parseError os.Error = nil
+    var parseError error = nil
     if cType == "application/x-www-form-urlencoded" || cType == "text/plain" || cType == "" {
         parseError = req.ParseForm()
     }
     if parseError != nil {
-        fmt.Fprintf(&logEntry, "\nFailed to parse params%q\n", parseError.String())
+        fmt.Fprintf(&logEntry, "\nFailed to parse params%q\n", parseError.Error())
     } else if len(req.Form) > 0 {
         for k, v := range req.Form {
             ctx.Params[k] = v[0]
@@ -290,8 +291,8 @@ func (s *Server) routeHandler(req *http.Request, w ResponseWriter) {
 
     //set some default headers
     ctx.SetHeader("Server", "web.go", true)
-    tm := time.UTC()
-    ctx.SetHeader("Date", webTime(tm), true)
+    tm := time.Now().UTC()
+    ctx.SetHeader("Date", webTime(&tm), true)
 
     //try to serve a static file
     staticDir := s.Config.StaticDir
@@ -409,9 +410,9 @@ func (s *Server) Run(addr string) {
 
     mux := http.NewServeMux()
 
+    mux.Handle("/debug/pprof/", http.HandlerFunc(pprof.Index))
     mux.Handle("/debug/pprof/cmdline", http.HandlerFunc(pprof.Cmdline))
     mux.Handle("/debug/pprof/profile", http.HandlerFunc(pprof.Profile))
-    mux.Handle("/debug/pprof/heap", http.HandlerFunc(pprof.Heap))
     mux.Handle("/debug/pprof/symbol", http.HandlerFunc(pprof.Symbol))
     mux.Handle("/", s)
 
@@ -535,7 +536,7 @@ func dirExists(dir string) bool {
     switch {
     case e != nil:
         return false
-    case !d.IsDirectory():
+    case !d.IsDir():
         return false
     }
 
@@ -546,7 +547,7 @@ func fileExists(dir string) bool {
     info, err := os.Stat(dir)
     if err != nil {
         return false
-    } else if !info.IsRegular() {
+	} else if info.Mode()&os.ModeType != 0 {
         return false
     }
 
